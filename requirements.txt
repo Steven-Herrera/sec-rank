@@ -1,0 +1,13 @@
+pytest
+pylint
+black
+numpy
+tensorflow-hub
+tensorflow-text
+tensorflow
+tensorflow-ranking
+tensorflow-recommenders
+tensorflow-addons
+pandas
+scikit-learn
+tdqm
