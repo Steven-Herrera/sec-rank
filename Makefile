@@ -24,6 +24,6 @@ docker-lint:
 	hadolint Dockerfile
 
 lint:
-	pylint --disable=R,C test_MyRuleRankingLib.py
+	pylint --disable=R,C test_MyRuleRankingLib_beta.py
 
 all: install lint test
