@@ -67,6 +67,7 @@ def encode_checker(txt):
         new_text = " ".join(can_be_encoded)
         return new_text, cannot_be_encoded
     else:
+        new_text = " ".join(can_be_encoded)
         return new_text
 
 # Helper function used to print datasets

@@ -9,5 +9,4 @@ tensorflow-ranking
 tensorflow-recommenders
 tensorflow-addons
 pandas
-scikit-learn
 tqdm
