@@ -10,12 +10,11 @@ import os
 import google.protobuf.text_format as pbtext
 import tqdm
 
-
 def data_loader(directory=None):
     if directory == None:
         directory = os.getcwd()
     else:
-        directory = directory
+        directory = directory # pylint: disable=self-assigning-variable;
     path_to_labeled_dir = "Labeled_Data/ExcelParser_Outputs"
     directory_path = os.path.join(directory, path_to_labeled_dir)
     file_list = os.listdir(directory_path)
@@ -49,9 +48,152 @@ def data_loader(directory=None):
 
     return package, rule_names
 
+# some words are represented as byte strings that cannot be encoded as utf-8
+# this function removes those words
+def encode_checker(txt):
+    all_words = txt.split()
+    can_be_encoded = []
+    cannot_be_encoded = {}
+    for i in range(len(all_words)):
+        word = all_words[i]
+        try:
+            word.encode("utf-8")
+            can_be_encoded.append(word)
+        except UnicodeEncodeError:
+            cannot_be_encoded[i] = word
+    if len(can_be_encoded) == 0:
+        return cannot_be_encoded
+    elif len(can_be_encoded) > 0 and len(cannot_be_encoded) > 0:
+        new_text = " ".join(can_be_encoded)
+        return new_text, cannot_be_encoded
+    else:
+        return new_text
 
-# In[ ]:
+# Helper function used to print datasets
+def print_dictionary_dataset(dataset):
+    for i, element in enumerate(dataset):
+        print("Element {}:".format(i))
+        for feature_name, feature_value in element.items():
+            print("{:>14} = {}".format(feature_name, feature_value))
 
+def mask_rows(nrules, rule_rl, com_rl, max_com_rl):
+    # rule_emb_repeat is a padded tensor so create a boolean mask to convert it to ragged
+    # find amount of rules
+    # boolean mask input
+
+    msk_rows = tf.TensorArray(tf.int32, size=0, dynamic_size=True)
+    # use row lengths to create input for boolean mask
+    for i in range(nrules):
+        #         row = tf.repeat(rule_rl[i], repeats=com_rl.__getitem__(i), axis=0)
+        #         if com_rl.__getitem__(i) < max_com_rl:
+        row = tf.repeat(rule_rl[i], repeats=com_rl[i], axis=0)
+        if com_rl[i] < max_com_rl:
+            # num of True values
+            len_row = tf.cast(tf.shape(row)[0], tf.dtypes.int32)
+            # num of False values
+            pads = tf.repeat([0], repeats=(max_com_rl - len_row), axis=0)
+            # concat together to ensure len(row) is 'max_com_rl' long
+            new_row = tf.concat([row, pads], 0)
+            msk_rows = msk_rows.write(i, new_row)
+        else:
+            msk_rows = msk_rows.write(i, row)
+
+    msk_rows = msk_rows.stack()
+    msk_3d = tf.sequence_mask(tf.cast(msk_rows, tf.dtypes.int32))
+
+    return msk_3d
+
+def remove_empty_lists(rt):
+    nrl = rt.nested_row_lengths()
+    empties = tf.squeeze(tf.where(nrl[1] == 0), axis=1)
+    diff = tf.expand_dims(rt.nested_row_splits[0][1:], axis=0) - tf.expand_dims(
+        empties, axis=1
+    )
+    diff_absolute = tf.where(diff <= 0, diff.dtype.limits[1], diff)
+    diff_min = tf.argmin(diff_absolute, axis=1)
+    counts = tf.unique_with_counts(diff_min)
+    to_subtract = tf.scatter_nd(
+        tf.expand_dims(counts.y, 1),
+        counts.count,
+        tf.cast(tf.shape(nrl[0]), tf.dtypes.int64),
+    )
+    non_empties = tf.squeeze(tf.where(nrl[1] != 0), axis=1)
+    nrl_updated = tf.gather(nrl[1], non_empties, axis=None)
+    result = tf.RaggedTensor.from_nested_row_lengths(
+        rt.flat_values, (nrl[0] - tf.cast(to_subtract, tf.int64), nrl_updated)
+    )
+    return result
+
+def inspect_ragged_results(tfds, y_pred, rule_names):
+    num_rules = len(rule_names)
+    for x in tfds.take(num_rules):
+        inputs = dict(
+            labeledscore=x["score"],
+            rule_embs=x["rule_embs"],
+            comment_embs=x["comment_embs"],
+            rule=x["rule"],
+            comment=x["comments"],
+            name=x["names"],
+            hyperlink=x["hyperlinks"],
+        )
+
+    rule_list = inputs["rule"].numpy()
+    name_lists = inputs["name"].numpy()
+    hyperlink_lists = inputs["hyperlink"].numpy()
+    # ragged tensor y_pred to list
+    score_lists = y_pred.to_list()
+    dataframes = {}
+    for i in range(len(rule_list)):
+        data = {}
+        # flatten nested score_list
+        data["PredScore"] = [item for sublist in score_lists[i] for item in sublist]
+        data["LabeledScore"] = inputs["labeledscore"][i].numpy().tolist()
+        data["Name"] = [name.decode("utf-8") for name in name_lists[i]]
+        data["Hyperlink"] = [link.decode("utf-8") for link in hyperlink_lists[i]]
+        df = pd.DataFrame.from_dict(data)
+        sorted_df = df.sort_values(by="PredScore", ascending=False)
+        # remove rows that were artificially created to make a rectangular dataset
+        filtered_df = sorted_df[sorted_df["Name"] != "NA"]
+        dataframes[rule_names[i]] = filtered_df
+
+    # dict structure
+    # {"rule_name": dataframe}
+    return dataframes
+
+# for non-ragged results
+def inspect_results_v1(tfds, y_pred, rule_names):
+    num_rules = len(rule_names)
+    for x in tfds.take(num_rules):
+        y = x["score"]
+        inputs = dict(
+            rule_embs=x["rule_embs"],
+            comment_embs=x["comment_embs"],
+            rule=x["rule"],
+            comment=x["comment"],
+            name=x["name"],
+            hyperlink=x["hyperlink"],
+        )
+
+    rule_list = inputs["rule"].numpy()
+    name_lists = inputs["name"].numpy()
+    hyperlink_lists = inputs["hyperlink"].numpy()
+    score_lists = [score_list for score_list in y_pred]
+    dataframes = {}
+    for i in range(len(rule_list)):
+        data = {}
+        data["PredScore"] = score_lists[i].ravel()
+        data["LabeledScore"] = np.round(y.numpy()[i], 4)
+        data["Name"] = [name.decode("utf-8") for name in name_lists[i]]
+        data["Hyperlink"] = [link.decode("utf-8") for link in hyperlink_lists[i]]
+        df = pd.DataFrame.from_dict(data)
+        sorted_df = df.sort_values(by="PredScore", ascending=False)
+        # remove rows that were artificially created to make a rectangular dataset
+        filtered_df = sorted_df[sorted_df["LabeledScore"] > 0]
+        dataframes[rule_names[i]] = filtered_df
+
+    # dict structure
+    # {"rule_name": dataframe}
+    return dataframes
 
 # function to take package from data_loader and create a train/val/test dataset
 def train_val_test_package(package, train_size, val_size):
@@ -92,7 +234,6 @@ def train_val_test_package(package, train_size, val_size):
     test_package["Dataframes"] = test_dfs
 
     return train_package, val_package, test_package
-
 
 def text_chunker(package):
     # max number of tokens bert can use
@@ -162,90 +303,6 @@ def text_chunker(package):
 
     return split_texts, rule_most_chunks, comments_most_chunks, rule_most_comments
 
-
-# In[ ]:
-
-
-# a function to equalize list size by adding zero tensors during embedding
-# def text_max_embeddings(
-#     split_texts, rule_most_chunks, comments_most_chunks, rule_most_comments
-# ):
-#     new_dict = copy.deepcopy(split_texts)
-#     new_dict["rule_embs"] = []
-#     new_dict["comment_embs"] = []
-
-#     # the output embeddings are different for various versions of bert
-#     emb_dims = {"small_bert": 128, "bert": 768, "roberta": 1024}
-#     # set the appropriate embedding dimensions
-#     dims = emb_dims["bert"]
-#     # embed every comment
-#     for i in range(len(new_dict["rule"])):
-#         rule_tensor = tf.convert_to_tensor(new_dict["rule"][i], dtype=tf.string)
-#         rule_inp = bert_preprocessor(rule_tensor)
-#         rule_outputs = bert(rule_inp)["pooled_output"]
-#         rule_nrows = rule_outputs.shape[0]
-#         rule_padding = (rule_most_chunks - rule_nrows) * dims
-#         rule_pads = tf.constant([[0, 0], [0, rule_padding]])
-#         rule_reshape = tf.pad(tf.reshape(rule_outputs, (1, -1)), rule_pads, "CONSTANT")
-#         new_dict["rule_embs"].append(rule_reshape)
-
-#         tensor_comment_list = []
-#         for j in range(len(new_dict["comment"][i])):
-#             comment_tensor = tf.convert_to_tensor(
-#                 new_dict["comment"][i][j], dtype=tf.string
-#             )
-#             comment_inp = bert_preprocessor(comment_tensor)
-#             # output's embedding are of shape(num_chunks, embedding_dims)
-#             comment_outputs = bert(comment_inp)["pooled_output"]
-#             # nrows = num_chunks in the output
-#             comment_nrows = comment_outputs.shape[0]
-#             # the number of 0's we need to pad the tensor
-#             pads_needed = (comments_most_chunks - comment_nrows) * dims
-#             # a tensor used for padding the output tensor
-#             paddings = tf.constant([[0, 0], [0, pads_needed]])
-#             # flatten the outputs from (num_chunks, embedding_dims) to (1, num_tokens) and pad the tensor
-#             reshape_pad = tf.pad(
-#                 tf.reshape(comment_outputs, (1, -1)), paddings, "CONSTANT"
-#             )
-#             tensor_comment_list.append(reshape_pad)
-
-#             # rejoin all the split strings back into one string for easier inspection later
-#             new_comment_tensor = tf.strings.join(comment_tensor)
-#             new_dict["comment"][i][j] = new_comment_tensor
-
-#         # This block pads lists with zeros or NAs
-#         num_comments_in_rule = len(tensor_comment_list)
-#         num_zero_comments = rule_most_comments - num_comments_in_rule
-#         zero_comments_list = [
-#             tf.zeros((1, dims * comments_most_chunks), dtype=tf.float32)
-#             for i in range(num_zero_comments)
-#         ]
-#         zero_scores_list = [0 for i in range(num_zero_comments)]
-#         empty_comment_list = [tf.constant("NA") for i in range(num_zero_comments)]
-#         pad_name_link = ["NA" for i in range(num_zero_comments)]
-#         new_dict["score"][i].extend(zero_scores_list)
-#         tensor_comment_list.extend(zero_comments_list)
-#         new_dict["comment"][i].extend(empty_comment_list)
-#         new_dict["name"][i].extend(pad_name_link)
-#         new_dict["hyperlink"][i].extend(pad_name_link)
-#         #################################################################################
-
-#         # rejoin split strings
-#         new_rule_tensor = tf.strings.join(rule_tensor, separator=" ")
-#         new_dict["rule"][i] = new_rule_tensor
-
-#         # for some reason the dimensionality is (num_comments, 1, max_token_emb)
-#         # this block transposes the result to (1, num_comments, max_token_emb)
-#         all_comments_tensor = tf.convert_to_tensor(tensor_comment_list)
-#         transposed_tensor = tf.transpose(all_comments_tensor, perm=[1, 0, 2])
-#         new_dict["comment_embs"].append(transposed_tensor)
-
-#     return new_dict
-
-
-# In[ ]:
-
-
 def text_ragged_embeddings(
     split_texts, model
 ):
@@ -306,10 +363,6 @@ def text_ragged_embeddings(
 
     return new_dict
 
-
-# In[ ]:
-
-
 # converts split texts dict to appropriate tfds dimensions
 def tfds_creator(split_texts):
     num_rules = len(split_texts["rule"])
@@ -336,10 +389,6 @@ def tfds_creator(split_texts):
     tfds = tfds.batch(num_rules)
     return tfds
 
-
-# In[ ]:
-
-
 # a function to flatten the emb lists in comment_embs list
 def flatten_com_embs(embs):
     new_dict = copy.deepcopy(embs)
@@ -361,10 +410,6 @@ def flatten_com_embs(embs):
     new_dict["emb_lengths"] = lengths_list
 
     return new_dict
-
-
-# In[ ]:
-
 
 # a function to create a ragged dataset
 # https://www.tensorflow.org/guide/ragged_tensor
@@ -444,224 +489,9 @@ def ragged_tfds_creator(flat_embs):
         "rule_lengths": tf.io.RaggedFeature(value_key="rule_lengths", dtype=tf.int64),
     }
 
-    feature_dict = tf.io.parse_example(ragged_batch, features)
+    feature_dict = tf.io.parse_example(ragged_batch, features) # pylint: disable=no-value-for-parameter;
     ragged_dataset = tf.data.Dataset.from_tensor_slices(feature_dict)
     return ragged_dataset.batch(batch_num), feature_dict
-
-
-# some words are represented as byte strings that cannot be encoded as utf-8
-# this function removes those words
-def encode_checker(txt):
-    all_words = txt.split()
-    can_be_encoded = []
-    for i in range(len(all_words)):
-        word = all_words[i]
-        try:
-            word.encode("utf-8")
-            can_be_encoded.append(word)
-        except UnicodeEncodeError:
-            print(word)
-    if len(can_be_encoded) == 0:
-        print("Empty List")
-    new_text = " ".join(can_be_encoded)
-    return new_text
-
-
-# In[ ]:
-
-
-# probably never going to need this
-# def flatten_find_lengths(embs):
-#     new_dict = copy.deepcopy(embs)
-#     # rule isnt nested
-#     one_rules_list = new_dict["rule"]
-#     # flatten the rest of the nested lists
-#     one_comments_list = [item for sublist in new_dict["comment"] for item in sublist]
-#     one_scores_list = [item for sublist in new_dict["score"] for item in sublist]
-#     one_names_list = [item for sublist in new_dict["name"] for item in sublist]
-#     one_hyperlinks_list = [
-#         item for sublist in new_dict["hyperlink"] for item in sublist
-#     ]
-#     one_rule_embs_list = [item for sublist in new_dict["rule_embs"] for item in sublist]
-#     # triple nested
-#     one_comment_embs_list = [
-#         item
-#         for sublist in [
-#             item for sublist in new_dict["comment_embs"] for item in sublist
-#         ]
-#         for item in sublist
-#     ]
-#     flattened_lists = {}
-#     flattened_lists["rule_list"] = one_rules_list
-#     flattened_lists["comment_list"] = one_comments_list
-#     flattened_lists["score_list"] = one_scores_list
-#     flattened_lists["name_list"] = one_names_list
-#     flattened_lists["hyperlink_list"] = one_hyperlinks_list
-#     flattened_lists["rule_emb_list"] = one_rule_embs_list
-#     flattened_lists["comment_emb_list"] = one_comment_embs_list
-
-#     # capture lengths for comment embs (triple nested)
-#     # num_of_embs_in_embs_list = []
-#     num_of_nums_in_emb = []
-#     for i in range(len(new_dict["comment_embs"])):
-#         embs_list = new_dict["comment_embs"][i]
-#         # tells me how many embs are in each rule
-#         # this is actually equal to results in length_dict['comment']
-#         # num_of_embs_in_embs_list.append(len(embs_list))
-#         for j in range(len(embs_list)):
-#             embs = embs_list[j]
-#             # this tells me how many numbers are in each emb (AKA the emb size for each doc emb)
-#             num_of_nums_in_emb.append(len(embs))
-
-#     # capture lengths for double nested lists
-#     length_dict = {}
-#     for key in ragged_embs.keys():
-#         # comment_embs are triple nested and rule isn't nested
-#         # rule_embs has a unique length size
-#         # comment has the same lengths as the keys that are left
-#         if (key == "comment") or (key == "rule_embs"):
-#             feature = ragged_embs[key]
-#             feature_lengths = []
-#             for i in range(len(feature)):
-#                 lst = feature[i]
-#                 feature_lengths.append(len(lst))
-#             length_dict[key] = feature_lengths
-#     length_dict["comment_embs"] = num_of_nums_in_emb
-#     return length_dict, flattened_lists
-
-
-
-# Helper function used to print datasets
-def print_dictionary_dataset(dataset):
-    for i, element in enumerate(dataset):
-        print("Element {}:".format(i))
-        for feature_name, feature_value in element.items():
-            print("{:>14} = {}".format(feature_name, feature_value))
-
-
-def mask_rows(nrules, rule_rl, com_rl, max_com_rl):
-    # rule_emb_repeat is a padded tensor so create a boolean mask to convert it to ragged
-    # find amount of rules
-    # boolean mask input
-
-    msk_rows = tf.TensorArray(tf.int32, size=0, dynamic_size=True)
-    # use row lengths to create input for boolean mask
-    for i in range(nrules):
-        #         row = tf.repeat(rule_rl[i], repeats=com_rl.__getitem__(i), axis=0)
-        #         if com_rl.__getitem__(i) < max_com_rl:
-        row = tf.repeat(rule_rl[i], repeats=com_rl[i], axis=0)
-        if com_rl[i] < max_com_rl:
-            # num of True values
-            len_row = tf.cast(tf.shape(row)[0], tf.dtypes.int32)
-            # num of False values
-            pads = tf.repeat([0], repeats=(max_com_rl - len_row), axis=0)
-            # concat together to ensure len(row) is 'max_com_rl' long
-            new_row = tf.concat([row, pads], 0)
-            msk_rows = msk_rows.write(i, new_row)
-        else:
-            msk_rows = msk_rows.write(i, row)
-
-    msk_rows = msk_rows.stack()
-    msk_3d = tf.sequence_mask(tf.cast(msk_rows, tf.dtypes.int32))
-
-    return msk_3d
-
-
-
-def remove_empty_lists(rt):
-    nrl = rt.nested_row_lengths()
-    empties = tf.squeeze(tf.where(nrl[1] == 0), axis=1)
-    diff = tf.expand_dims(rt.nested_row_splits[0][1:], axis=0) - tf.expand_dims(
-        empties, axis=1
-    )
-    diff_absolute = tf.where(diff <= 0, diff.dtype.limits[1], diff)
-    diff_min = tf.argmin(diff_absolute, axis=1)
-    counts = tf.unique_with_counts(diff_min)
-    to_subtract = tf.scatter_nd(
-        tf.expand_dims(counts.y, 1),
-        counts.count,
-        tf.cast(tf.shape(nrl[0]), tf.dtypes.int64),
-    )
-    non_empties = tf.squeeze(tf.where(nrl[1] != 0), axis=1)
-    nrl_updated = tf.gather(nrl[1], non_empties)
-    result = tf.RaggedTensor.from_nested_row_lengths(
-        rt.flat_values, (nrl[0] - tf.cast(to_subtract, tf.int64), nrl_updated)
-    )
-    return result
-
-
-def inspect_ragged_results(tfds, y_pred, rule_names):
-    num_rules = len(rule_names)
-    for x in tfds.take(num_rules):
-        inputs = dict(
-            labeledscore=x["score"],
-            rule_embs=x["rule_embs"],
-            comment_embs=x["comment_embs"],
-            rule=x["rule"],
-            comment=x["comments"],
-            name=x["names"],
-            hyperlink=x["hyperlinks"],
-        )
-
-    rule_list = inputs["rule"].numpy()
-    name_lists = inputs["name"].numpy()
-    hyperlink_lists = inputs["hyperlink"].numpy()
-    # ragged tensor y_pred to list
-    score_lists = y_pred.to_list()
-    dataframes = {}
-    for i in range(len(rule_list)):
-        data = {}
-        # flatten nested score_list
-        data["PredScore"] = [item for sublist in score_lists[i] for item in sublist]
-        data["LabeledScore"] = inputs["labeledscore"][i].numpy().tolist()
-        data["Name"] = [name.decode("utf-8") for name in name_lists[i]]
-        data["Hyperlink"] = [link.decode("utf-8") for link in hyperlink_lists[i]]
-        df = pd.DataFrame.from_dict(data)
-        sorted_df = df.sort_values(by="PredScore", ascending=False)
-        # remove rows that were artificially created to make a rectangular dataset
-        filtered_df = sorted_df[sorted_df["Name"] != "NA"]
-        dataframes[rule_names[i]] = filtered_df
-
-    # dict structure
-    # {"rule_name": dataframe}
-    return dataframes
-
-
-# for non-ragged results
-def inspect_results_v1(tfds, y_pred, rule_names):
-    num_rules = len(rule_names)
-    for x in tfds.take(num_rules):
-        y = x["score"]
-        inputs = dict(
-            rule_embs=x["rule_embs"],
-            comment_embs=x["comment_embs"],
-            rule=x["rule"],
-            comment=x["comment"],
-            name=x["name"],
-            hyperlink=x["hyperlink"],
-        )
-
-    rule_list = inputs["rule"].numpy()
-    name_lists = inputs["name"].numpy()
-    hyperlink_lists = inputs["hyperlink"].numpy()
-    score_lists = [score_list for score_list in y_pred]
-    dataframes = {}
-    for i in range(len(rule_list)):
-        data = {}
-        data["PredScore"] = score_lists[i].ravel()
-        data["LabeledScore"] = np.round(y.numpy()[i], 4)
-        data["Name"] = [name.decode("utf-8") for name in name_lists[i]]
-        data["Hyperlink"] = [link.decode("utf-8") for link in hyperlink_lists[i]]
-        df = pd.DataFrame.from_dict(data)
-        sorted_df = df.sort_values(by="PredScore", ascending=False)
-        # remove rows that were artificially created to make a rectangular dataset
-        filtered_df = sorted_df[sorted_df["LabeledScore"] > 0]
-        dataframes[rule_names[i]] = filtered_df
-
-    # dict structure
-    # {"rule_name": dataframe}
-    return dataframes
-
 
 class RankingModel(tfrs.Model):
     def __init__(self, loss):
@@ -693,7 +523,7 @@ class RankingModel(tfrs.Model):
             ],
         )
 
-    def call(self, features):
+    def call(self, features=None): # pylint: disable=arguments-differ;
         # batch_size = num rules to feed at one time
         # (batch_size, ragged)
         rule_embeddings = features["rule_embs"]
@@ -707,7 +537,6 @@ class RankingModel(tfrs.Model):
 
         # find largest row lengths
         max_com_rl = tf.reduce_max(com_rl)
-        max_rul_rl = tf.reduce_max(rule_rl)
 
         # find num of rules
         #         nrules = tf.get_static_value(tf.shape(features['comment_embs']).num_row_partitions)
@@ -719,7 +548,7 @@ class RankingModel(tfrs.Model):
         )
 
         # boolean mask for creating a ragged tensor
-        msk_3d = mask_rows(nrules, rule_rl, com_rl, max_com_rl, max_rul_rl)
+        msk_3d = mask_rows(nrules, rule_rl, com_rl, max_com_rl)
 
         # shape is (2, max_com_rl, ragged)
         # this is bc there are empty elements e.g. [[0.9, 0.1], [], [], []]
@@ -743,7 +572,7 @@ class RankingModel(tfrs.Model):
         # set max emb size for each rule
         concat_rl = tf.repeat(max_concat, repeats=nrules, axis=0)
         # create boolean mask
-        mask = mask_rows(nrules, concat_rl, com_rl, max_com_rl, max_rul_rl)
+        mask = mask_rows(nrules, concat_rl, com_rl, max_com_rl)
         # pad concat embs to max emb size
         concat_emb_tensor = concatenated_embeddings.to_tensor(
             default_value=0.0, shape=[nrules, max_com_rl, max_concat]
@@ -754,7 +583,7 @@ class RankingModel(tfrs.Model):
         # merge dimensions
         merge_concat = rag_concat_rep_.merge_dims(0, 1)
         # find row lengths for creating ragged tensor
-        row_splits = tf.concat([tf.constant([0]), tf.cumsum(com_rl)], axis=0)
+        row_splits = tf.concat([tf.constant([0]), tf.cumsum(com_rl, axis=0)], 0)
         # ragged tensor is shape (nrules, (ragged_1, ... , ragged_nrules), custom_emb_size)
         ragged_tensor = tf.RaggedTensor.from_row_splits(
             merge_concat.to_tensor(), row_splits
@@ -762,7 +591,7 @@ class RankingModel(tfrs.Model):
 
         return self.score_model(ragged_tensor)
 
-    def compute_loss(self, features, training=False):
+    def compute_loss(self, features): # pylint: disable=arguments-differ;
         labels = features.pop("score")
 
         scores = self(features)

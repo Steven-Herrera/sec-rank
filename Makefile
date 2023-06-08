@@ -12,7 +12,8 @@ sec-env-init:
 	conda init bash
 
 sec-env:
-	conda create --name py311 -c conda-forge python=3.11 && conda activate py311
+	conda create --name py311 -c conda-forge python=3.11 && conda init bash
+	#conda activate py311
 
 sec-install:
 	conda install -c conda-forge --file requirements.txt
@@ -24,6 +25,6 @@ docker-lint:
 	hadolint Dockerfile
 
 lint:
-	pylint --disable=R,C test_MyRuleRankingLib_beta.py
+	pylint --disable=R,C test_MyRuleRankingLib.py
 
 all: install lint test
