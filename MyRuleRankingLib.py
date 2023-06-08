@@ -10,7 +10,7 @@ import os
 import google.protobuf.text_format as pbtext
 import tqdm
 
-def test_data_loader(directory=None):
+def data_loader(directory=None):
     if directory == None:
         directory = os.getcwd()
     else:
@@ -46,7 +46,7 @@ def test_data_loader(directory=None):
     # package = { 'Rules': { 'RuleName': str },
     #             'Dataframes': { 'RuleName': pandas df }}
 
-    assert isinstance(package, dict) and isinstance(rule_names, list)
+    return package, rule_names
 
 # some words are represented as byte strings that cannot be encoded as utf-8
 # this function removes those words

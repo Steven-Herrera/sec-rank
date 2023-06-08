@@ -19,12 +19,12 @@ sec-install:
 	conda install -c conda-forge --file requirements.txt
 
 test:
-	python -m pytest -vv test_MyRuleRankingLib.py -W ignore::DeprecationWarning
+	python3 -m pytest -vv test_MyRuleRankingLib.py -W ignore::DeprecationWarning
 
 docker-lint:
 	hadolint Dockerfile
 
 lint:
-	pylint --disable=R,C test_MyRuleRankingLib.py
+	pylint --disable=R,C MyRuleRankingLib.py
 
 all: install lint test
