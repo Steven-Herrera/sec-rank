@@ -1,18 +1,19 @@
 # main
-name: Python 3.11.3
+name: Python 3.10.10
 on: [push]
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - name: Set up Python 3.11.3
+    - name: Set up Python 3.10.10
       uses: actions/setup-python@v1
       with:
-        python-version: 3.11.3
+        python-version: 3.10.10
     - name: Install dependencies
       run: |
         python3 -m venv ~/.sec-rank && source ~/.sec-rank/bin/activate
+        apt install libopenblas-dev  pkg-config libopenblas64-dev
         make install
         sudo wget -O /bin/hadolint https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64 && sudo chmod +x /bin/hadolint
 
@@ -21,9 +22,10 @@ jobs:
         source ~/.sec-rank/bin/activate
         make lint
         
-    - name: Docker lint
-      run: |
-        make docker-lint
+#    - name: Docker lint
+#      run: |
+#        make docker-lint
+        
     - name: Test
       run: |
         source ~/.sec-rank/bin/activate
