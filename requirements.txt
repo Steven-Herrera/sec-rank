@@ -10,4 +10,4 @@ tensorflow-recommenders
 tensorflow-addons
 pandas
 tqdm
-scikit-learn
+scikit-learn==1.8
