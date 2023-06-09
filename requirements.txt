@@ -10,4 +10,4 @@ tensorflow-recommenders
 tensorflow-addons
 pandas
 tqdm
-sklearn
+scikit-learn
