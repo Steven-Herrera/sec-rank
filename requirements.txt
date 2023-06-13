@@ -11,3 +11,6 @@ tensorflow-addons
 pandas
 tqdm
 scikit-learn
+apache-airflow # Needs Apache Airflow installed
+apache-airflow-providers-airbyte # Needs Airbyte installed
+bs4
