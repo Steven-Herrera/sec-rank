@@ -1,10 +1,9 @@
 pytest
 pylint
 black
-numpy
+tensorflow
 tensorflow-hub
 tensorflow-text
-tensorflow
 tensorflow-ranking
 tensorflow-recommenders
 tensorflow-addons
@@ -14,3 +13,18 @@ scikit-learn
 apache-airflow # Needs Apache Airflow installed
 apache-airflow-providers-airbyte # Needs Airbyte installed
 bs4
+
+requests
+pyhtml2pdf
+txt2pdf.core
+pdfy
+pikepdf
+pypdf
+glob
+os
+shutil
+concurrent.futures
+threading
+argparse
+datetime
+psutil

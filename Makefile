@@ -16,7 +16,9 @@ sec-env:
 	#conda activate py311
 
 sec-install:
-	conda install -c conda-forge --file requirements.txt
+	conda config --set ssl_verify no && conda install -c conda-forge --file requirements.txt
+	pip install -r sec_pip_requirements.txt
+	pip install --trusted-host pypi.python.org --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
 
 test:
 	python3 -m pytest -vv test_MyRuleRankingLib.py -W ignore::DeprecationWarning
