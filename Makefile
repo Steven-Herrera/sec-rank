@@ -21,12 +21,21 @@ sec-install:
 	pip install --trusted-host pypi.python.org --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
 
 test:
-	python3 -m pytest -vv test_MyRuleRankingLib.py -W ignore::DeprecationWarning
+	python3 -m pytest -vv tests/*.py -W ignore::DeprecationWarning
+
+test-dag:
+	python3 -m pytest -vv test_airbyte_airflow_sec_dag.py
+
+test-webscraper:
+	python3 -m pytest -vv test_webscraper.py
 
 docker-lint:
 	hadolint Dockerfile
 
 lint:
 	pylint --disable=R,C MyRuleRankingLib.py
+
+lint-webscraper:
+	pylint --disable=R,C test_webscraper.py
 
 all: install lint test
