@@ -20,11 +20,4 @@ txt2pdf
 pdfy
 pikepdf
 pypdf
-glob
-os
-shutil
-concurrent.futures
-threading
-argparse
-datetime
 psutil
