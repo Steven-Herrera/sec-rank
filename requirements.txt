@@ -16,7 +16,7 @@ bs4
 
 requests
 pyhtml2pdf
-txt2pdf.core
+txt2pdf
 pdfy
 pikepdf
 pypdf
