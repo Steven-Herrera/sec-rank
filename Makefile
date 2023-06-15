@@ -38,4 +38,7 @@ lint:
 lint-webscraper:
 	pylint --disable=R,C test_webscraper.py
 
+lint-dag:
+	pylint --load-plugins=pylint_airflow test_airbyte_airflow_sec_dag.py
+
 all: install lint test
